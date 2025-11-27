@@ -562,39 +562,40 @@ if __name__ == "__main__":
     from boxx.ylth import *
     from ddn_utils import debug, argkv
 
-    if debug:
-        boxx.cf.debug = True
-        main(
-            [
-                "--data=datasets/cifar10-32x32.zip",
-                "--outdir=/tmp/edm-code",
-                "--duration=0.000001",
-                "--batch=6",
-                "--batch-gpu=3",
-                "--cbase=4",
-                "--max-blockn=2",
-                "--max-outputk=64",
-                "--tick=1",
-                # "--arch=ddpmpp",
-                # "--transfer=cifar10-ddn.pkl",
-                "--learn-res=1",
-                "--fp16=1",
-                # "--diverge-shaping=1",
-                # "--cond=1",
-                # "--condition=class",
-                # "--condition=resize8",
-                # "--condition=edge",
-                "--blockn-times=3",
-                "--start-size=32",
-            ]
-        )
-        # show(d["condition"].float(), tprgb);show(d["target"].float(), tprgb, norma)
-        from sddn import DiscreteDistributionOutput
+    # if debug:
+    #     boxx.cf.debug = True
+    #     main(
+    #         [
+    #             "--data=datasets/cifar10-32x32.zip",
+    #             "--outdir=/tmp/edm-code",
+    #             "--duration=0.000001",
+    #             "--batch=6",
+    #             "--batch-gpu=3",
+    #             "--cbase=4",
+    #             "--max-blockn=2",
+    #             "--max-outputk=64",
+    #             "--tick=1",
+    #             # "--arch=ddpmpp",
+    #             # "--transfer=cifar10-ddn.pkl",
+    #             "--learn-res=1",
+    #             "--fp16=1",
+    #             # "--diverge-shaping=1",
+    #             # "--cond=1",
+    #             # "--condition=class",
+    #             # "--condition=resize8",
+    #             # "--condition=edge",
+    #             "--blockn-times=3",
+    #             "--start-size=32",
+    #         ]
+    #     )
+    #     # show(d["condition"].float(), tprgb);show(d["target"].float(), tprgb, norma)
+    #     from sddn import DiscreteDistributionOutput
 
-        sdd = DiscreteDistributionOutput.inits[-1].sdd
-        sdd.plot_dist()
-        print(net.module.model.table())
-    else:
-        # %run train.py --batch-gpu=3 --duration=0.0001 --batch=6 --outdir=/tmp/d --data=datasets/cifar10-32x32.zip --debug 0
-        main()
+    #     sdd = DiscreteDistributionOutput.inits[-1].sdd
+    #     sdd.plot_dist()
+    #     print(net.module.model.table())
+    # else:
+    #     # %run train.py --batch-gpu=3 --duration=0.0001 --batch=6 --outdir=/tmp/d --data=datasets/cifar10-32x32.zip --debug 0
+    #     main()
+    main()
 # ----------------------------------------------------------------------------

@@ -124,7 +124,7 @@ def training_loop(
         else None
     )  # training.augment.AugmentPipe
     ddp = torch.nn.parallel.DistributedDataParallel(
-        net, device_ids=[device], broadcast_buffers=False
+        net, device_ids=[dist.get_rank()], broadcast_buffers=False
     )
     if ema_halflife_kimg:
         ema = copy.deepcopy(net).eval().requires_grad_(False)
