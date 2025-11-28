@@ -17,7 +17,10 @@ import dnnlib
 from torch_utils import distributed as dist
 from training import training_loop
 
+import wandb
 import warnings
+import numpy as np
+import random
 
 warnings.filterwarnings(
     "ignore", "Grad strides do not match bucket view strides"
@@ -326,6 +329,57 @@ def parse_int_list(s):
     "--resume", help="Resume from previous training state", metavar="PT", type=str
 )
 @click.option("-n", "--dry-run", help="Print training options and exit", is_flag=True)
+
+# [New Options] DDN Loss Weights & WandB
+@click.option(
+    "--alpha-ortho",
+    help="Weight for Orthogonal Loss",
+    metavar="FLOAT",
+    type=float,
+    default=0.0,
+    show_default=True,
+)
+@click.option(
+    "--beta-weak",
+    help="Weight for Weak Attraction Loss",
+    metavar="FLOAT",
+    type=float,
+    default=0.0,
+    show_default=True,
+)
+# [New] SNP Toggle Option 추가
+@click.option(
+    "--use-snp",
+    help="Use Split and Prune mechanism",
+    metavar="BOOL",
+    type=bool,
+    default=True,  # 기본값은 True (기존 동작 유지)
+    show_default=True,
+)
+@click.option(
+    "--wandb-project",
+    help="WandB Project Name",
+    metavar="STR",
+    type=str,
+    default="ddn-experiment",
+    show_default=True,
+)
+@click.option(
+    "--wandb-run-name",
+    help="WandB Run Name",
+    metavar="STR",
+    type=str,
+    default=None,
+    show_default=True,
+)
+@click.option(
+    "--wandb-group",
+    help="WandB Group Name",
+    metavar="STR",
+    type=str,
+    default=None,
+    show_default=True,
+)
 def main(**kwargs):
     """Train diffusion-based generative model using the techniques described in the
     paper "Elucidating the Design Space of Diffusion-Based Generative Models".
@@ -340,8 +394,14 @@ def main(**kwargs):
     boxx.cf.kwargs = kwargs
     import sddn
 
+    # [Added] Inject Dynamic Loss Weights into SDDN Class
     sddn.DiscreteDistributionOutput.learn_residual = kwargs.get("learn_res")
     sddn.DiscreteDistributionOutput.chain_dropout = kwargs.get("chain_dropout")
+    sddn.DiscreteDistributionOutput.alpha_ortho = kwargs.get("alpha_ortho", 0.0)
+    sddn.DiscreteDistributionOutput.beta_weak = kwargs.get("beta_weak", 0.0)
+
+    # [New] SNP 사용 여부 주입
+    sddn.DiscreteDistributionOutput.use_snp = kwargs.get("use_snp", True)
 
     if kwargs.get("condition") == "class":
         kwargs["cond"] = True
@@ -457,9 +517,18 @@ def main(**kwargs):
         kimg_per_tick=opts.tick, snapshot_ticks=opts.snap, state_dump_ticks=opts.dump
     )
 
-    # Random seed.
+    # [Modified] Random seed Logic
     if opts.seed is not None:
         c.seed = opts.seed
+        # Ensure reproducibility if seed is explicitly set
+        torch.manual_seed(c.seed)
+        torch.cuda.manual_seed(c.seed)
+        torch.cuda.manual_seed_all(c.seed)
+        np.random.seed(c.seed)
+        random.seed(c.seed)
+        # Force deterministic if seeding.
+        # c.cudnn_benchmark = False 
+        # torch.backends.cudnn.deterministic = True
     else:
         seed = torch.randint(1 << 31, size=[], device=torch.device("cuda"))
         torch.distributed.broadcast(seed, src=0)
@@ -541,15 +610,35 @@ def main(**kwargs):
             c_dump = {"kwargs": kwargs}
             c_dump.update(c)
             json.dump(c_dump, f, indent=2)
+        
+        # [Fix] Logger class isatty monkey patch for WandB compatibility
+        if not hasattr(dnnlib.util.Logger, 'isatty'):
+            dnnlib.util.Logger.isatty = lambda self: False
+
         dnnlib.util.Logger(
             file_name=os.path.join(c.run_dir, "log.txt"),
             file_mode="a",
             should_flush=True,
         )
+        
+        # [Added] Initialize WandB (Only on rank 0)
+        run_name = opts.wandb_run_name if opts.wandb_run_name else f"{desc}-ortho{opts.alpha_ortho}-weak{opts.beta_weak}"
+        wandb.init(
+            project=opts.wandb_project,
+            name=run_name,
+            group=opts.wandb_group,
+            config=c_dump,
+            dir=c.run_dir,
+            job_type="train"
+        )
 
     # Train.
     boxx.mg()
     training_loop.training_loop(**c)
+    
+    # [Added] Finish WandB
+    if dist.get_rank() == 0:
+        wandb.finish()
 
 
 # ----------------------------------------------------------------------------

@@ -35,7 +35,7 @@ class VPLoss:
         n = torch.randn_like(y) * sigma
         D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
         loss = weight * ((D_yn - y) ** 2)
-        return loss
+        return loss, {}
 
     def sigma(self, t):
         t = torch.as_tensor(t)
@@ -64,7 +64,7 @@ class VELoss:
         n = torch.randn_like(y) * sigma
         D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
         loss = weight * ((D_yn - y) ** 2)
-        return loss
+        return loss, {}
 
 
 # ----------------------------------------------------------------------------
@@ -90,7 +90,7 @@ class EDMLoss:
         D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
         loss = weight * ((D_yn - y) ** 2)
         boxx.cf.debug and boxx.g()
-        return loss
+        return loss, {}
 
     """
 # analysis about sigma 
@@ -144,4 +144,4 @@ class DDNLoss:
             loss = sum(d["losses"]) / len(d["losses"])  # mean Hierarchical
         loss = loss * y.numel()  # EDM code is using .sum() instead of .mean()
         boxx.cf.debug and boxx.g()
-        return loss
+        return loss, d

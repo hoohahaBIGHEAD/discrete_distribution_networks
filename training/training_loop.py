@@ -1,3 +1,5 @@
+# discrete_distribution_networks/training/training_loop.py
+
 # Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # This work is licensed under a Creative Commons
@@ -21,6 +23,10 @@ import dnnlib
 from torch_utils import distributed as dist
 from torch_utils import training_stats
 from torch_utils import misc
+
+# [Added] WandB & Logging Imports
+import wandb
+from collections import defaultdict
 
 # ----------------------------------------------------------------------------
 
@@ -169,6 +175,11 @@ def training_loop(
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg // 1000, total_kimg)
     stats_jsonl = None
+
+    # [Added] WandB & Logging Initialization
+    global_step = 0
+    layer_idx_buffers = defaultdict(list)
+
     while True:
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
@@ -177,9 +188,12 @@ def training_loop(
                 images, labels = next(dataset_iterator)
                 images = images.to(device).to(torch.float32) / 127.5 - 1
                 labels = labels.to(device)
-                loss = loss_fn(
+                
+                # [Modified] Unpack loss and dict
+                loss, d = loss_fn(
                     net=ddp, images=images, labels=labels, augment_pipe=augment_pipe
                 )
+                
                 training_stats.report("Loss/loss", loss)
                 loss_ = loss.sum().mul(loss_scaling / batch_gpu_total)
                 # TODO: loss_ up to 1044.4198
@@ -197,10 +211,73 @@ def training_loop(
                     param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad
                 )
         optimizer.step()
-        # Try splti all
+        
+        # Try split all (SNP Control)
         from sddn import DiscreteDistributionOutput
+        if getattr(DiscreteDistributionOutput, "use_snp", True):
+            DiscreteDistributionOutput.try_split_all(optimizer)
 
-        DiscreteDistributionOutput.try_split_all(optimizer)
+        # [Added] WandB Logging (Rank 0 only)
+        if dist.get_rank() == 0:
+            log_dict = {
+                # [Log] Match Author's 'loss' (scaled loss used for backward)
+                "train/total_loss": loss_.item(), 
+                # [Log] Match Author's 'mean' (per-pixel mean loss)
+                "train/mean_pixel_loss": loss.sum().item() / images.numel(),
+                "kimg": cur_nimg / 1000,
+                "lr": optimizer.param_groups[0]['lr']
+            }
+
+            if isinstance(d, dict):
+                # Component Losses
+                if "log_attract" in d and d["log_attract"]: 
+                    log_dict["train/loss_attract"] = torch.stack(d["log_attract"]).mean().item()
+                if "log_ortho" in d and d["log_ortho"]: 
+                    log_dict["train/loss_ortho"] = torch.stack(d["log_ortho"]).mean().item()
+                if "log_weak" in d and d["log_weak"]: 
+                    log_dict["train/loss_weak"] = torch.stack(d["log_weak"]).mean().item()
+
+                # Collect Indices
+                if "layer_idx_k" in d:
+                    for layer_idx, idx_tensor in d["layer_idx_k"].items():
+                        layer_idx_buffers[layer_idx].append(idx_tensor.flatten().detach().cpu())
+
+            # Periodic Logging (Every 50 steps)
+            if global_step % 50 == 0:
+                for layer_idx, buffers in layer_idx_buffers.items():
+                    if buffers:
+                        all_indices = torch.cat(buffers).numpy()
+                        # Assuming K=64 or similar, dynamic binning
+                        max_val = int(all_indices.max())
+                        bins = np.arange(max_val + 2)
+                        counts = np.bincount(all_indices, minlength=max_val + 1)
+                        
+                        # 1. Histogram
+                        np_hist = (counts, bins)
+                        log_dict[f"layers/{layer_idx}/hist"] = wandb.Histogram(np_histogram=np_hist)
+                        
+                        # 2. Perplexity (Reset based on window)
+                        total_count = counts.sum()
+                        if total_count > 0:
+                            probs = counts / total_count
+                            probs = probs[probs > 0]
+                            entropy = -np.sum(probs * np.log(probs))
+                            perplexity = np.exp(entropy)
+                        else:
+                            perplexity = 0.0
+                        
+                        # log_dict[f"layers/{layer_idx}/entropy"] = entropy # (Disabled)
+                        log_dict[f"layers/{layer_idx}/perplexity"] = perplexity
+
+                # Clear buffers for next window
+                layer_idx_buffers.clear()
+
+                # Log Splits (Cumulative)
+                for i, ddo in enumerate(DiscreteDistributionOutput.inits):
+                    log_dict[f"layers/{i}/splits"] = len(ddo.sdd.split_iters)
+
+            wandb.log(log_dict)
+            global_step += 1
 
         # Update EMA.
         if ema_halflife_kimg:
